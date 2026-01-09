@@ -142,7 +142,7 @@
         }
         
         footer a {
-            color: var(--light-brown);
+            color: white;
             text-decoration: none;
         }
         
@@ -166,7 +166,7 @@
         }
 
         .inhe {color:inherit; text-decoration:none ;}
-        a {color:inherit;}
+        a {color:inherit; font-weight:bold;}
         
         @media (max-width: 768px) {
             .content-right .row {
