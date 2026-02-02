@@ -1,0 +1,99 @@
+name: Deploy Eleventy to XMIT
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+    inputs:
+      site:
+        description: "XMIT site/domain (e.g. writingtable.xmit.dev)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-xmit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELEVENTY_RUN_MODE: build
+  # Skip pagefind in eleventy.after - we run it manually in workflow
+  SKIP_PAGEFIND: "1"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      XMIT_SITE: writingtable.xmit.dev@268
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Build Eleventy + Pagefind
+        run: |
+          start_time=$(date +%s%3N)
+          npx @11ty/eleventy --quiet
+          npx pagefind --site _site --glob "**/*.html"
+          end_time=$(date +%s%3N)
+          echo "⚡ Build completed in $((end_time - start_time))ms"
+
+      - name: Compress assets (parallel gzip + brotli)
+        run: |
+          node --experimental-vm-modules <<'EOF'
+          import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+          import { gzip, brotliCompress, constants } from 'node:zlib';
+          import { join } from 'node:path';
+          import { promisify } from 'node:util';
+          const gzipAsync = promisify(gzip);
+          const brotliAsync = promisify(brotliCompress);
+          const files = [];
+          function walk(dir) {
+            for (const f of readdirSync(dir)) {
+              const full = join(dir, f);
+              const st = statSync(full);
+              if (st.isDirectory()) walk(full);
+              else if (/\.(html|css|js)$/i.test(f)) files.push(full);
+            }
+          }
+          walk('_site');
+          await Promise.all(files.map(async (p) => {
+            const d = readFileSync(p);
+            const [gz, br] = await Promise.all([
+              gzipAsync(d, { level: 9 }),
+              brotliAsync(d, { params: { [constants.BROTLI_PARAM_QUALITY]: 6 } })
+            ]);
+            writeFileSync(p + '.gz', gz);
+            writeFileSync(p + '.br', br);
+          }));
+          console.log(`✓ Compressed ${files.length} files`);
+          EOF
+        shell: bash
+
+      - name: Deploy to XMIT
+        env:
+          XMIT_KEY: ${{ secrets.XMIT_KEY }}
+        run: |
+          [ -z "$XMIT_KEY" ] && { echo "XMIT_KEY secret not set" >&2; exit 1; }
+          SITE="${{ github.event_name == 'workflow_dispatch' && inputs.site || env.XMIT_SITE }}"
+          [ -z "$SITE" ] && { echo "XMIT site not provided" >&2; exit 1; }
+          echo "Deploying to $SITE"
+          npx -y @xmit.co/xmit "$SITE" _site
+
+      - name: Summary
+        run: echo "✅ Deployed to https://${{ env.XMIT_SITE }}"
+    #       tar -czf site.tar.gz -C _site .
+    #       curl -f -X POST \
+    #         -H "Authorization: Bearer $XMIT_KEY" \
+    #         -F "bundle=@site.tar.gz" \
+    #         https://api.xmit.example/deploy?site=$XMIT_SITE
