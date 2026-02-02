@@ -15,6 +15,10 @@ config.autoAddCss = false;
 export default function(eleventyConfig) {
     eleventyConfig.addDataExtension("yaml", contents => yaml.load(contents));
     eleventyConfig.addGlobalData("faStyles", dom.css());
+    
+    // Add CSS and JS bundles for WebC getBundle() support
+    eleventyConfig.addBundle("css");
+    eleventyConfig.addBundle("js");
        
     const mdLib = markdownIt({
         html: true,
